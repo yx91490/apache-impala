@@ -47,6 +47,20 @@ set -eu -o pipefail
 : ${IMPALA_HOME:=$(cd "$(dirname $0)"/..; pwd)}
 export IMPALA_HOME
 
+: ${COMPILE_ONLY:=false}
+export COMPILE_ONLY
+
+# parse command line options
+while [ -n "$*" ]
+do
+  case "$1" in
+    -compile_only)
+      COMPILE_ONLY=true
+      ;;
+  esac
+  shift;
+done
+
 if [[ -t 1 ]] # if on an interactive terminal
 then
   echo "This script will clobber some system settings. Are you sure you want to"
@@ -311,7 +325,7 @@ redhat sudo yum install -y ccache
 redhat sudo yum clean all
 
 # Download ant for centos
-if [ ! -d /usr/local/apache-ant-1.9.14 ]; then
+if [ "$COMPILE_ONLY" = false ] && [ ! -d /usr/local/apache-ant-1.9.14 ]; then
   redhat sudo [ -f apache-ant-1.9.14-bin.tar.gz ] || wget -nv \
     https://archive.apache.org/dist/ant/binaries/apache-ant-1.9.14-bin.tar.gz
   redhat sudo sha512sum -c - <<< '487dbd1d7f678a92924ba884a57e910ccb4fe565c554278795a8fdfc80c4e88d81ebc2ccecb5a8f353f0b2076572bb921499a2cadb064e0f44fc406a3c31da20  apache-ant-1.9.14-bin.tar.gz'
@@ -321,7 +335,7 @@ fi
 
 # Download maven for all OSes, since the OS-packaged version can be
 # pretty old.
-if [ ! -d /usr/local/apache-maven-3.5.4 ]; then
+if [ "$COMPILE_ONLY" = false ] && [ ! -d /usr/local/apache-maven-3.5.4 ]; then
   sudo [ -f apache-maven-3.5.4-bin.tar.gz ] || wget -nv \
     https://archive.apache.org/dist/maven/maven-3/3.5.4/binaries/apache-maven-3.5.4-bin.tar.gz
   sudo sha512sum -c - <<< '2a803f578f341e164f6753e410413d16ab60fabe31dc491d1fe35c984a5cce696bc71f57757d4538fe7738be04065a216f3ebad4ef7e0ce1bb4c51bc36d6be86  apache-maven-3.5.4-bin.tar.gz'
@@ -357,50 +371,54 @@ fi
 
 echo ">>> Configuring system"
 
-redhat6 sudo service postgresql initdb
-redhat6 sudo service postgresql stop
-redhat7 notindocker sudo service postgresql initdb
-redhat7 notindocker sudo service postgresql stop
-redhat7 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data pg_ctl init
-redhat8 notindocker sudo service postgresql initdb
-redhat8 notindocker sudo service postgresql stop
-redhat8 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data pg_ctl init
-ubuntu sudo service postgresql stop
+if [ "$COMPILE_ONLY" = false ]; then
+  redhat6 sudo service postgresql initdb
+  redhat6 sudo service postgresql stop
+  redhat7 notindocker sudo service postgresql initdb
+  redhat7 notindocker sudo service postgresql stop
+  redhat7 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data pg_ctl init
+  redhat8 notindocker sudo service postgresql initdb
+  redhat8 notindocker sudo service postgresql stop
+  redhat8 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data pg_ctl init
+  ubuntu sudo service postgresql stop
 
-# These configurations expose connectiong to PostgreSQL via md5-hashed
-# passwords over TCP to localhost, and the local socket is trusted
-# widely.
-ubuntu sudo sed -ri 's/local +all +all +peer/local all all trust/g' \
-  /etc/postgresql/*/main/pg_hba.conf
-redhat sudo sed -ri 's/local +all +all +(ident|peer)/local all all trust/g' \
-  /var/lib/pgsql/data/pg_hba.conf
-# Accept md5 passwords from localhost
-redhat sudo sed -i -e 's,\(host.*\)ident,\1md5,' /var/lib/pgsql/data/pg_hba.conf
+  # These configurations expose connectiong to PostgreSQL via md5-hashed
+  # passwords over TCP to localhost, and the local socket is trusted
+  # widely.
+  ubuntu sudo sed -ri 's/local +all +all +peer/local all all trust/g' \
+    /etc/postgresql/*/main/pg_hba.conf
+  redhat sudo sed -ri 's/local +all +all +(ident|peer)/local all all trust/g' \
+    /var/lib/pgsql/data/pg_hba.conf
+  # Accept md5 passwords from localhost
+  redhat sudo sed -i -e 's,\(host.*\)ident,\1md5,' /var/lib/pgsql/data/pg_hba.conf
 
-ubuntu sudo service postgresql start
-redhat6 sudo service postgresql start
-redhat7 notindocker sudo service postgresql start
-redhat8 notindocker sudo service postgresql start
-# Important to redirect pg_ctl to a logfile, lest it keep the stdout
-# file descriptor open, preventing the shell from exiting.
-redhat7 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data bash -c \
-  "pg_ctl start -w --timeout=120 >> /var/lib/pgsql/pg.log 2>&1"
-redhat8 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data bash -c \
-  "pg_ctl start -w --timeout=120 >> /var/lib/pgsql/pg.log 2>&1"
+  ubuntu sudo service postgresql start
+  redhat6 sudo service postgresql start
+  redhat7 notindocker sudo service postgresql start
+  redhat8 notindocker sudo service postgresql start
+  # Important to redirect pg_ctl to a logfile, lest it keep the stdout
+  # file descriptor open, preventing the shell from exiting.
+  redhat7 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data bash -c \
+    "pg_ctl start -w --timeout=120 >> /var/lib/pgsql/pg.log 2>&1"
+  redhat8 indocker sudo -u postgres PGDATA=/var/lib/pgsql/data bash -c \
+    "pg_ctl start -w --timeout=120 >> /var/lib/pgsql/pg.log 2>&1"
 
-# Set up postgres for HMS
-if ! [[ 1 = $(sudo -u postgres psql -At -c "SELECT count(*) FROM pg_roles WHERE rolname = 'hiveuser';") ]]
-then
-  sudo -u postgres psql -c "CREATE ROLE hiveuser LOGIN PASSWORD 'password';"
-fi
-sudo -u postgres psql -c "ALTER ROLE hiveuser WITH CREATEDB;"
-# On Ubuntu 18.04 aarch64 version, the sql 'select * from pg_roles' blocked,
-# because output of 'select *' is too long to display in 1 line.
-# So here just change it to 'select count(*)' as a work around.
-if [[ $ARCH_NAME == 'aarch64' ]]; then
-  sudo -u postgres psql -c "SELECT count(*) FROM pg_roles WHERE rolname = 'hiveuser';"
+  # Set up postgres for HMS
+  if ! [[ 1 = $(sudo -u postgres psql -At -c "SELECT count(*) FROM pg_roles WHERE rolname = 'hiveuser';") ]]
+  then
+    sudo -u postgres psql -c "CREATE ROLE hiveuser LOGIN PASSWORD 'password';"
+  fi
+  sudo -u postgres psql -c "ALTER ROLE hiveuser WITH CREATEDB;"
+  # On Ubuntu 18.04 aarch64 version, the sql 'select * from pg_roles' blocked,
+  # because output of 'select *' is too long to display in 1 line.
+  # So here just change it to 'select count(*)' as a work around.
+  if [[ $ARCH_NAME == 'aarch64' ]]; then
+    sudo -u postgres psql -c "SELECT count(*) FROM pg_roles WHERE rolname = 'hiveuser';"
+  else
+    sudo -u postgres psql -c "SELECT * FROM pg_roles WHERE rolname = 'hiveuser';"
+  fi
 else
-  sudo -u postgres psql -c "SELECT * FROM pg_roles WHERE rolname = 'hiveuser';"
+  echo ">>> Skip download and config postgresql."
 fi
 
 # Setup ssh to ssh to localhost
@@ -508,6 +526,6 @@ if [[ $ARCH_NAME == 'aarch64' ]]; then
 fi
 
 # Try to prepopulate the m2 directory to save time
-if ! bin/jenkins/populate_m2_directory.py ; then
+if [ "$COMPILE_ONLY" = false ] && ! bin/jenkins/populate_m2_directory.py ; then
   echo "Failed to prepopulate the m2 directory. Continuing..."
 fi
