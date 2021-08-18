@@ -322,7 +322,7 @@ fi
 # Download maven for all OSes, since the OS-packaged version can be
 # pretty old.
 if [ ! -d /usr/local/apache-maven-3.5.4 ]; then
-  sudo wget -nv \
+  sudo [ -f apache-maven-3.5.4-bin.tar.gz ] || wget -nv \
     https://archive.apache.org/dist/maven/maven-3/3.5.4/binaries/apache-maven-3.5.4-bin.tar.gz
   sudo sha512sum -c - <<< '2a803f578f341e164f6753e410413d16ab60fabe31dc491d1fe35c984a5cce696bc71f57757d4538fe7738be04065a216f3ebad4ef7e0ce1bb4c51bc36d6be86  apache-maven-3.5.4-bin.tar.gz'
   sudo tar -C /usr/local -x --no-same-owner -zf apache-maven-3.5.4-bin.tar.gz
