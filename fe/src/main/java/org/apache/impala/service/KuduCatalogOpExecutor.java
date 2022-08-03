@@ -23,6 +23,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.impala.catalog.FeKuduTable;
@@ -501,11 +502,24 @@ public class KuduCatalogOpExecutor {
    */
   public static void addColumn(KuduTable tbl, List<TColumn> columns)
       throws ImpalaRuntimeException {
-    AlterTableOptions alterTableOptions = new AlterTableOptions();
-    for (TColumn column: columns) {
-      alterTableOptions.addColumn(createColumnSchema(column, false));
-    }
+    Preconditions.checkState(tbl.isWriteLockedByCurrentThread());
+    KuduClient kudu = KuduUtil.getKuduClient(tbl.getKuduMasterHosts());
     String errMsg = "Error adding columns to Kudu table " + tbl.getName();
+    org.apache.kudu.client.KuduTable kuduTable;
+    try {
+      kuduTable = kudu.openTable(tbl.getKuduTableName());
+    } catch (KuduException e) {
+      throw new ImpalaRuntimeException(errMsg, e);
+    }
+    Set<String> oldColumns = kuduTable.getSchema().getColumns()
+        .stream().map(it -> it.getName().toLowerCase())
+        .collect(Collectors.toSet());
+    AlterTableOptions alterTableOptions = new AlterTableOptions();
+    for (TColumn column : columns) {
+      if (!oldColumns.contains(column.getColumnName())) {
+        alterTableOptions.addColumn(createColumnSchema(column, false));
+      }
+    }
     alterKuduTable(tbl, alterTableOptions, errMsg);
   }
 
